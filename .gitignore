@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Python (uploader)
+__pycache__/
+*.pyc
+
+# Build
+build/
+build-*/
+
+# Editor
+*.swp
