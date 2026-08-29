@@ -65,12 +65,9 @@ int main()
     };
 
     int result = STATUS_CODE(STATUS_CODE_OK);
-    int max_address = (
-        (
-            (*BUFFER_STATUS & STATUS_CODE_START_PAGE_COUNT_M) >> STATUS_CODE_START_PAGE_COUNT_S 
-        )
-        + 1
-    ) * EEPROM_PAGE_WORDS * 4;
+    int max_address = ((*BUFFER_STATUS & STATUS_CODE_START_PAGE_COUNT_M) >>
+                       STATUS_CODE_START_PAGE_COUNT_S) *
+                      EEPROM_PAGE_WORDS * 4;
 
     HAL_EEPROM_Erase(&heeprom, 0, EEPROM_PAGE_WORDS, HAL_EEPROM_WRITE_ALL, EEPROM_OP_TIMEOUT);
 

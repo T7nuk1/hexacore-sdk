@@ -8,6 +8,8 @@ if(SDK_FREERTOS)
         include(${CMAKE_CURRENT_LIST_DIR}/freertos.cmake)
 endif()
 
+include(${CMAKE_CURRENT_LIST_DIR}/drivers.cmake)
+
 function(sdk_add_executable target)
         add_executable(${target}
                 ${ARGN}
@@ -19,10 +21,10 @@ function(sdk_add_executable target)
                         ${SDK_ROOT}/bsp/freertos/bsp_main.c
                         ${SDK_ROOT}/bsp/freertos/mik32_freertos_glue.c
                 )
-                target_link_libraries(${target} PRIVATE mik32_hal mik32_freertos c gcc)
+                target_link_libraries(${target} PRIVATE mik32_hal hexa_drivers mik32_freertos c gcc)
         else()
                 target_sources(${target} PRIVATE ${SDK_ROOT}/bsp/bsp_main.c)
-                target_link_libraries(${target} PRIVATE mik32_hal c gcc)
+                target_link_libraries(${target} PRIVATE mik32_hal hexa_drivers c gcc)
         endif()
 
         target_link_options(${target} PRIVATE

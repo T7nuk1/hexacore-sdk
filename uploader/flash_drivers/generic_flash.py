@@ -328,7 +328,7 @@ class GenericFlash():
 
         self.openocd.halt()
         # Отключение прерываний
-        self.openocd.run("$_TARGETNAME set_reg {mstatus 0 mie 0}")
+        self.openocd.run("riscv.cpu set_reg {mstatus 0 mie 0}")
 
         # self.init()
         # openocd.run("rwp")

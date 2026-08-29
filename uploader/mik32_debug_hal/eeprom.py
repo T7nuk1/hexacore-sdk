@@ -227,6 +227,9 @@ class EEPROM():
         pages: Dict[int, List[int]] -- страница - список байт, ключ - адрес в EEPROM
         """
 
+        # TODO: добавить проверку на версию mik32 - текущий драйвер поддерживает
+        # только версию mik32v2
+
         RAM_OFFSET = 0x02000000
         RAM_BUFFER_OFFSET = 0x02001800
         RAM_DRIVER_STATUS = 0x02003800
@@ -234,11 +237,11 @@ class EEPROM():
         bytes_list = combine_pages(pages)
         self.openocd.halt()
         # Отключение прерываний
-        self.openocd.run("$_TARGETNAME set_reg {mstatus 0 mie 0}")
+        self.openocd.run("riscv.cpu set_reg {mstatus 0 mie 0}")
 
         STATUS_CODE_M = 0xFF
 
-        max_address = (len(bytes_list) // 128)-1
+        max_address = len(bytes_list) // 128
         self.openocd.write_memory(RAM_DRIVER_STATUS, 32, [
                                   1 | (max_address << 8)])
 

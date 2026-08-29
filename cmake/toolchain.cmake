@@ -1,7 +1,9 @@
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR riscv32)
 
-set(TOOLCHAIN_PREFIX riscv-none-elf)
+if(NOT DEFINED TOOLCHAIN_PREFIX)
+        set(TOOLCHAIN_PREFIX riscv-none-elf)
+endif()
 
 set(CMAKE_C_COMPILER   ${TOOLCHAIN_PREFIX}-gcc)
 set(CMAKE_ASM_COMPILER ${TOOLCHAIN_PREFIX}-gcc)

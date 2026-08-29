@@ -30,21 +30,16 @@ openocd\bin\openocd.exe относительно папки со скрипто�
 
 ## Запуск программы
 
-Для работы утилиты требуется подключение к OpenOCD.
-
-Если OpenOCD уже запущен и подключен к МК, а порт интерфейса Tcl оставлен по умолчанию (6666), 
-достаточно запустить утилиту с минимальным набором аргументов:
+Минимальная команда для запуска:
 
 ```
 python mik32_upload.py firmware_name.hex
 ```
 
-Если OpenOCD не был запущен пользователем, утилита может запустить OpenOCD 
-(аргумент `--run-openocd`) и подключиться к МК самостоятельно, 
-если дополнить аргументы:
+Команда для запуска OpenOCD при запуске скрипта:
 
 ```
-python mik32_upload.py firmware_name.hex --run-openocd --openocd-exec="path/bin/openocd.exe"  --openocd-interface="path/adapter.cfg" --openocd-target="path/mik32.cfg"
+python mik32_upload.py firmware_name.hex --run-openocd --openocd-exec="путь\к\openocd.exe"  --openocd-scripts="путь\к\папке\scripts" --openocd-interface="путь\к\настройкам\отладчика" --openocd-target="путь\к\настройкам\МК"
 ```
 
 ## Описание аргументов

@@ -248,17 +248,15 @@ def upload_file(
             try:
                 openocd.run(f"log_output \"{log_path}\"")
                 openocd.run(f"debug_level 1")
-                # Обратная совместимость со старым скриптом mik32.cfg
-                openocd.run(f"if {{![info exists _TARGETNAME]}} \
-                            {{ set _TARGETNAME riscv.cpu }}")
-                openocd.run("capture \"$_TARGETNAME curstate\"")
+                openocd.run("capture \"riscv.cpu curstate\"")
             except OSError as e:
                 print("ERROR: Tcl port connection failed")
                 print("Check connectivity and OpenOCD log")
                 return 1
-
+            
             if (all(openocd_interface.find(i) == -1 for i in adapter_speed_not_supported)):
                 openocd.run(f"adapter speed {adapter_speed}")
+            
 
             logging.debug("OpenOCD configured!")
 
@@ -270,7 +268,7 @@ def upload_file(
 
             if (pages.pages_eeprom.__len__() > 0):
                 eeprom = EEPROM(openocd)
-
+                
                 start_time = time.perf_counter()
 
                 if use_driver:
@@ -330,11 +328,7 @@ def upload_file(
                 gpio_deinit(openocd, mik_version)
 
             segments_ram = list(filter(
-                lambda segment: (segment.memory is not None) and
-                (
-                    (segment.memory.type == MemoryType.RAM) or
-                    (segment.memory.type == MemoryType.BOOT)
-                ), segments))
+                lambda segment: (segment.memory is not None) and (segment.memory.type == MemoryType.RAM), segments))
             if (segments_ram.__len__() > 0):
                 ram.write_segments(segments_ram, openocd)
                 result |= 0

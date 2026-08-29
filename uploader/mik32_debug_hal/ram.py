@@ -1,5 +1,5 @@
 from typing import List
-from mik32_upload import Segment, mik32_sections
+from mik32_upload import Segment
 from tclrpc import TclException
 from tclrpc import OpenOcdTclRpc
 from pathlib import Path
@@ -18,12 +18,11 @@ def write_file(filename):
 def write_segments(segments: List[Segment], openocd: OpenOcdTclRpc):
     openocd.halt()
     for segment in segments:
-        offset = 0x02000000 if segment.offset == 0x00000000 else segment.offset
         t = time.localtime()
         current_time = time.strftime("%H:%M:%S", t)
         print(f"[{current_time}] Writing segment %s with size %d..." % (hex(segment.offset), segment.data.__len__()))
         segment_words = bytes2words(segment.data)
-        openocd.write_memory(offset, 32, segment_words)
+        openocd.write_memory(segment.offset, 32, segment_words)
 
 
 def check_segments(segments: List[Segment], openocd: OpenOcdTclRpc) -> int:
