@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdint.h>
 
 #include "hexa_oled.h"
@@ -5,7 +6,71 @@
 #include "hexa_board.h"
 
 
-static uint8_t fb[1025] = { 0 };
+/* Буфер кадра: нулевой байт — control byte SSD1306 (0x40, "дальше идут
+ * данные"), дальше сама видеопамять. Размер выведен из hexa_board.h, а не
+ * записан числом: поменяешь там разрешение — пересчитается здесь.
+ *
+ * Control byte выставлен прямо в инициализаторе, а не в hexa_oled_init():
+ * иначе clear()+flush() до init() отправили бы килобайт в командный поток
+ * дисплея. */
+#define FB_DATA_SIZE    (HEXA_OLED_WIDTH * HEXA_OLED_HEIGHT / 8)
+#define FB_SIZE         (FB_OFFSET + FB_DATA_SIZE)
+
+_Static_assert(HEXA_OLED_HEIGHT % 8 == 0,
+        "SSD1306 адресует видеопамять страницами по 8 строк");
+
+static uint8_t fb[FB_SIZE] = { 0x40 };
+
+
+/* Применить маску к одному байту видеопамяти. Здесь и только здесь
+ * толкуется color, поэтому смысл "погасить / зажечь / инвертировать" один
+ * на всё, что рисует драйвер. */
+static void fb_apply(uint16_t idx, uint8_t mask, uint8_t color)
+{
+	switch (color) {
+		case 0: fb[idx] &= (uint8_t)~mask; break;
+		case 1: fb[idx] |=  mask;          break;
+		default: fb[idx] ^= mask;          break;
+	}
+}
+
+/* Смещение байта, в котором лежит пиксель (x,y). Видеопамять разбита на
+ * страницы по 8 строк, поэтому строку задаёт y/8, а не y. Координаты
+ * обязаны быть уже проверены. */
+static uint16_t fb_index(int16_t x, int16_t y)
+{
+	return (uint16_t)(FB_OFFSET + x + (y / 8) * HEXA_OLED_WIDTH);
+}
+
+/* Пиксель со знаковыми координатами: всё, что за экраном, молча
+ * отбрасывается. Вся геометрия ниже отсекает фигуры именно так — поэтому
+ * фигура, наполовину уехавшая за край, рисуется наполовину, а не
+ * заворачивается на другую сторону.
+ *
+ * Без знаковых координат этого не выразить: "левее нуля" в uint8_t
+ * неотличимо от "у правого края". */
+static void fb_pixel(int16_t x, int16_t y, uint8_t color)
+{
+	if (x < 0 || y < 0 || x >= HEXA_OLED_WIDTH || y >= HEXA_OLED_HEIGHT) {
+		return;
+	}
+
+	fb_apply(fb_index(x, y), (uint8_t)(1u << (y & 7)), color);
+}
+
+static int16_t iabs(int16_t v) { return v < 0 ? (int16_t)-v : v; }
+
+/* Целочисленный корень перебором. Считается один раз на строку заливки
+ * круга, радиусы тут в пределах полуэкрана — цикл короче, чем стоил бы
+ * вызов sqrt() из libm, которой в сборке всё равно нет. */
+static int16_t isqrt32(int32_t v)
+{
+	int16_t r = 0;
+	while ((int32_t)(r + 1) * (r + 1) <= v) {
+		r++;
+	}
+	return r;
+}
 
 /* 5x7 font, ASCII 0x20-0x7E, one byte per column, LSB = top row */
 static const uint8_t font5x7[][5] = {
@@ -109,8 +174,6 @@ static const uint8_t font5x7[][5] = {
 
 hexa_status_t hexa_oled_init(void)
 {
-	fb[0] = 0x40;
-
 	static const uint8_t init_cmds[] = {
 		0xAE,
 		0xD5, 0x80,
@@ -139,6 +202,12 @@ hexa_status_t hexa_oled_init(void)
 
 hexa_status_t hexa_oled_print(const char* str, uint8_t x, uint8_t y, uint8_t color)
 {
+	/* Глиф целиком вне экрана по вертикали — 35 отброшенных попыток
+	 * на символ. Дешевле отказаться сразу. */
+	if (y >= HEXA_OLED_HEIGHT) {
+		return HEXA_OK;
+	}
+
 	for (const char* p = str; *p != '\0'; p++) {
 		if (x >= HEXA_OLED_WIDTH) {
 			break;
@@ -154,7 +223,7 @@ hexa_status_t hexa_oled_print(const char* str, uint8_t x, uint8_t y, uint8_t col
 			uint8_t bits = glyph[col];
 			for (uint8_t row = 0; row < 7; row++) {
 				if (bits & (1u << row)) {
-					hexa_oled_pixel(x + col, y + row, color);
+					fb_pixel(x + col, y + row, color);
 				}
 			}
 		}
@@ -165,33 +234,283 @@ hexa_status_t hexa_oled_print(const char* str, uint8_t x, uint8_t y, uint8_t col
 	return HEXA_OK;
 }
 
+/* Публичный пиксель остаётся на uint8_t: так он описан в доке и так его
+ * зовут примеры. Геометрия ниже работает знаковыми координатами — ей
+ * нужно отличать "левее нуля" от "правее 255". */
 hexa_status_t hexa_oled_pixel(uint8_t x, uint8_t y, uint8_t color)
 {
-        if (x >= HEXA_OLED_WIDTH || y >= HEXA_OLED_HEIGHT) {
-                return HEXA_ERR;
-        }
+	if (x >= HEXA_OLED_WIDTH || y >= HEXA_OLED_HEIGHT) {
+		return HEXA_ERR;
+	}
 
-        uint16_t idx = FB_OFFSET + x + (y / 8) * HEXA_OLED_WIDTH;
-        uint8_t  mask = 1u << (y & 7);
-
-        switch (color) {
-                case 0: fb[idx]  &= ~mask; break;
-                case 1: fb[idx]  |=  mask; break;
-                default: fb[idx] ^= mask; break;
-        }
-
-        return HEXA_OK;
+	fb_pixel((int16_t)x, (int16_t)y, color);
+	return HEXA_OK;
 }
 
 hexa_status_t hexa_oled_clear(void)
 {
-        for (uint16_t i = FB_OFFSET; i < FB_OFFSET + HEXA_OLED_WIDTH * HEXA_OLED_HEIGHT / 8; i++) {
-                fb[i] = 0x00;
-        }
-        return HEXA_OK;
+	for (uint16_t i = FB_OFFSET; i < FB_SIZE; i++) {
+		fb[i] = 0x00;
+	}
+	return HEXA_OK;
 }
 
 hexa_status_t hexa_oled_flush(void)
 {
         return hexa_i2c_write_raw(HEXA_OLED_ADDR, fb, sizeof(fb));
+}
+
+
+/* ---- Геометрия ------------------------------------------------------- */
+
+hexa_status_t hexa_oled_hline(int16_t x, int16_t y, int16_t w, uint8_t color)
+{
+	if (w <= 0) {
+		return HEXA_ERR_PARAM;
+	}
+	if (y < 0 || y >= HEXA_OLED_HEIGHT) {
+		return HEXA_OK;
+	}
+
+	/* Отсечение по краям: сдвигаем начало и укорачиваем длину. */
+	if (x < 0) {
+		w += x;
+		x = 0;
+	}
+	if (x + w > HEXA_OLED_WIDTH) {
+		w = HEXA_OLED_WIDTH - x;
+	}
+	if (w <= 0) {
+		return HEXA_OK;
+	}
+
+	/* Строка лежит в одной странице видеопамяти, значит и маска на все
+	 * столбцы одна — считаем её один раз и идём по буферу подряд. */
+	uint16_t idx  = fb_index(x, y);
+	uint8_t  mask = (uint8_t)(1u << (y & 7));
+
+	for (int16_t i = 0; i < w; i++) {
+		fb_apply(idx + (uint16_t)i, mask, color);
+	}
+
+	return HEXA_OK;
+}
+
+hexa_status_t hexa_oled_vline(int16_t x, int16_t y, int16_t h, uint8_t color)
+{
+	if (h <= 0) {
+		return HEXA_ERR_PARAM;
+	}
+	if (x < 0 || x >= HEXA_OLED_WIDTH) {
+		return HEXA_OK;
+	}
+
+	if (y < 0) {
+		h += y;
+		y = 0;
+	}
+	if (y + h > HEXA_OLED_HEIGHT) {
+		h = HEXA_OLED_HEIGHT - y;
+	}
+	if (h <= 0) {
+		return HEXA_OK;
+	}
+
+	/* Вертикальный отрезок — тот случай, ради которого видеопамять и
+	 * устроена столбиками: на каждую страницу приходится ровно один байт.
+	 * Собираем маску из попавших в отрезок битов и пишем байт целиком,
+	 * вместо восьми проходов через fb_pixel(). */
+	const int16_t y_end = y + h;    /* не включая */
+
+	while (y < y_end) {
+		int16_t page_end = (y | 7) + 1;         /* первая строка след. страницы */
+		uint8_t bit_lo   = y & 7;
+		uint8_t bit_hi   = (page_end > y_end) ? (uint8_t)((y_end - 1) & 7) : 7;
+
+		uint8_t mask = (uint8_t)((0xFFu << bit_lo) & (0xFFu >> (7 - bit_hi)));
+		fb_apply(fb_index(x, y), mask, color);
+
+		y = page_end;
+	}
+
+	return HEXA_OK;
+}
+
+hexa_status_t hexa_oled_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint8_t color)
+{
+	/* Вырожденные случаи отдаём байтовым версиям: то же самое, но без
+	 * попиксельного цикла. */
+	if (y0 == y1) {
+		return hexa_oled_hline(x0 < x1 ? x0 : x1, y0, (int16_t)(iabs(x1 - x0) + 1), color);
+	}
+	if (x0 == x1) {
+		return hexa_oled_vline(x0, y0 < y1 ? y0 : y1, (int16_t)(iabs(y1 - y0) + 1), color);
+	}
+
+	/* Брезенхэм в форме с одной ошибкой на оба направления: dy взят со
+	 * знаком минус, тогда шаг по обеим осям проверяется симметрично и
+	 * ветвления на октанты не нужны.
+	 *
+	 * Отсечение тут попиксельное, внутри fb_pixel(). Для отрезка, почти
+	 * целиком ушедшего за экран, это трата тактов на заведомо
+	 * отброшенные точки — но дёшево и без отдельного алгоритма
+	 * отсечения, которому здесь взяться неоткуда. */
+	int16_t dx = iabs(x1 - x0),  sx = (x0 < x1) ? 1 : -1;
+	int16_t dy = (int16_t)-iabs(y1 - y0), sy = (y0 < y1) ? 1 : -1;
+	int32_t err = dx + dy;
+
+	for (;;) {
+		fb_pixel(x0, y0, color);
+
+		if (x0 == x1 && y0 == y1) {
+			break;
+		}
+
+		int32_t e2 = 2 * err;
+		if (e2 >= dy) { err += dy; x0 += sx; }
+		if (e2 <= dx) { err += dx; y0 += sy; }
+	}
+
+	return HEXA_OK;
+}
+
+hexa_status_t hexa_oled_rect(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t color)
+{
+	if (w <= 0 || h <= 0) {
+		return HEXA_ERR_PARAM;
+	}
+
+	hexa_oled_hline(x, y, w, color);
+	if (h == 1) {
+		return HEXA_OK;
+	}
+	hexa_oled_hline(x, (int16_t)(y + h - 1), w, color);
+
+	/* Боковины укорочены на пиксель сверху и снизу: углы уже нарисованы
+	 * горизонталями. Пройтись по ним дважды означало бы, что рамка в
+	 * режиме инверсии потеряет углы. */
+	if (h > 2) {
+		hexa_oled_vline(x, (int16_t)(y + 1), (int16_t)(h - 2), color);
+		if (w > 1) {
+			hexa_oled_vline((int16_t)(x + w - 1), (int16_t)(y + 1),
+			                (int16_t)(h - 2), color);
+		}
+	}
+
+	return HEXA_OK;
+}
+
+hexa_status_t hexa_oled_fill_rect(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t color)
+{
+	if (w <= 0 || h <= 0) {
+		return HEXA_ERR_PARAM;
+	}
+
+	for (int16_t i = 0; i < h; i++) {
+		hexa_oled_hline(x, (int16_t)(y + i), w, color);
+	}
+
+	return HEXA_OK;
+}
+
+/* Восемь симметричных точек окружности за один шаг алгоритма.
+ * Проверки не косметические: при x == 0 и при x == y часть точек
+ * совпадает, и без них инверсия (color > 1) гасила бы сама себя. */
+static void circle_points(int16_t cx, int16_t cy, int16_t x, int16_t y, uint8_t color)
+{
+	fb_pixel((int16_t)(cx + x), (int16_t)(cy + y), color);
+	fb_pixel((int16_t)(cx + x), (int16_t)(cy - y), color);
+
+	if (x != 0) {
+		fb_pixel((int16_t)(cx - x), (int16_t)(cy + y), color);
+		fb_pixel((int16_t)(cx - x), (int16_t)(cy - y), color);
+	}
+
+	if (x != y) {
+		fb_pixel((int16_t)(cx + y), (int16_t)(cy + x), color);
+		fb_pixel((int16_t)(cx - y), (int16_t)(cy + x), color);
+
+		if (x != 0) {
+			fb_pixel((int16_t)(cx + y), (int16_t)(cy - x), color);
+			fb_pixel((int16_t)(cx - y), (int16_t)(cy - x), color);
+		}
+	}
+}
+
+hexa_status_t hexa_oled_circle(int16_t cx, int16_t cy, int16_t r, uint8_t color)
+{
+	if (r < 0) {
+		return HEXA_ERR_PARAM;
+	}
+
+	/* Алгоритм средней точки: считаем только верхний октант, остальное
+	 * достраивается симметрией. Ошибка d — знак выражения окружности в
+	 * точке между двумя кандидатами на следующий шаг. */
+	int16_t x = 0;
+	int16_t y = r;
+	int16_t d = (int16_t)(1 - r);
+
+	while (x <= y) {
+		circle_points(cx, cy, x, y, color);
+
+		if (d < 0) {
+			d += (int16_t)(2 * x + 3);
+		} else {
+			d += (int16_t)(2 * (x - y) + 5);
+			y--;
+		}
+		x++;
+	}
+
+	return HEXA_OK;
+}
+
+hexa_status_t hexa_oled_fill_circle(int16_t cx, int16_t cy, int16_t r, uint8_t color)
+{
+	if (r < 0) {
+		return HEXA_ERR_PARAM;
+	}
+
+	/* Заливка строками, а не симметрией средней точки: у симметрии
+	 * горизонтали перекрываются, и в режиме инверсии круг пошёл бы
+	 * пятнами. Здесь каждая строка рисуется ровно один раз. */
+	const int32_t rr = (int32_t)r * r;
+
+	for (int16_t dy = (int16_t)-r; dy <= r; dy++) {
+		int16_t dx = isqrt32(rr - (int32_t)dy * dy);
+		hexa_oled_hline((int16_t)(cx - dx), (int16_t)(cy + dy),
+		                (int16_t)(2 * dx + 1), color);
+	}
+
+	return HEXA_OK;
+}
+
+hexa_status_t hexa_oled_bitmap(int16_t x, int16_t y, int16_t w, int16_t h,
+                               const uint8_t *bits, uint8_t color)
+{
+	if (bits == NULL || w <= 0 || h <= 0) {
+		return HEXA_ERR_PARAM;
+	}
+
+	/* Строка картинки выровнена на байт, хвостовые биты последнего байта
+	 * не значат ничего и пропускаются сами: цикл идёт до w, а не до
+	 * конца байта. */
+	const uint16_t stride = (uint16_t)((w + 7) / 8);
+
+	for (int16_t row = 0; row < h; row++) {
+		int16_t py = (int16_t)(y + row);
+		if (py < 0 || py >= HEXA_OLED_HEIGHT) {
+			continue;       /* строка за экраном — байты даже не читаем */
+		}
+
+		const uint8_t *line = bits + (uint16_t)row * stride;
+
+		for (int16_t col = 0; col < w; col++) {
+			if (line[col >> 3] & (0x80u >> (col & 7))) {
+				fb_pixel((int16_t)(x + col), py, color);
+			}
+		}
+	}
+
+	return HEXA_OK;
 }
